@@ -1,0 +1,17 @@
+#!/bin/bash
+set -e
+
+# Make sure our binary file is executable by the system
+chmod 755 /usr/local/bin/disk-guardian
+
+# Secure the configuration folder so regular users can't see the ntfy topic
+chmod 750 /etc/disk-guardian
+chmod 640 /etc/disk-guardian/disk-guardian.conf
+
+echo "========================================================"
+echo " Disk Guardian installed successfully!"
+echo " Please configure your ntfy topic in:"
+echo " /etc/disk-guardian/disk-guardian.conf"
+echo "========================================================"
+
+exit 0

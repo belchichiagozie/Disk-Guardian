@@ -1,0 +1,46 @@
+#!/bin/bash
+
+CONFIG="/etc/disk-guardian/disk-guardian.conf"
+
+if [ "$EUID" -ne 0 ]; then
+    echo "Error: This script must be run with sudo privileges"
+    exit 1
+fi
+
+if [ ! -f "$CONFIG" ]; then
+    echo "Error: Configuration file not found at $CONFIG">&2
+    exit 1
+fi
+
+source "$CONFIG"
+
+if [ -z "$NTFY_TOPIC" ] || [ -z "$THRESHOLD" ] || [ -z "$TARGET" ]; then
+    echo "ERROR: Config file is missing required variables (NTFY_TOPIC, THRESHOLD, or TARGET)." >&2
+    exit 1
+fi
+
+USAGE=$(df -h "$TARGET" | awk 'NR==2 {print $5}' | sed 's/%//')
+
+if [ "$USAGE" -gt "$THRESHOLD" ]; then
+
+    TIMESTAMP=$(date "+%Y-%m-%d %H:%M:%S")
+    echo "[$TIMESTAMP] ALERT: Storage threshold breached on $TARGET ($USAGE%)"
+    LARGE_FILES=$(du -ah "$TARGET" 2>/dev/null | sort -rh | head -n 5)
+
+    echo -e "[$TIMESTAMP]"
+    echo -e "Top 5 largest files:\n $LARGE_FILES"$'\n' >> "$LOG_FILE"
+
+    curl \
+      -H "Title: Disk Space Alert - $TARGET" \
+      -H "Priority: high" \
+      -H "Tags: warning,computer" \
+      -d "Storage at ${USAGE}%. Top offenders: $LARGE_FILES" \
+      "https://ntfy.sh/$NTFY_TOPIC"
+
+else
+    echo "OK: Storage levels normal ($USAGE%)" >> "$LOG_FILE"
+fi
+
+
+
+

@@ -1,0 +1,6 @@
+Package: disk-guardian
+Version: 1.0.0
+Architecture: all
+Maintainer: Belchi Emeka-Gwacham
+Depends: curl, coreutils, gawk
+Description: A lightweight storage monitoring agent that dispatches high-priority telemetry alerts straight to mobile phones via ntfy.
