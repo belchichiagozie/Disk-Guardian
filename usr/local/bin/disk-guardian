@@ -1,18 +1,75 @@
 #!/bin/bash
 
+DRY_RUN=false
+TEST_MODE=false
+
 CONFIG="/etc/disk-guardian/disk-guardian.conf"
 
-if [ "$EUID" -ne 0 ]; then
-    echo "Error: This script must be run with sudo privileges"
-    exit 1
-fi
-
-if [ ! -f "$CONFIG" ]; then
+if [ -f "$CONFIG" ]; then
+    source "$CONFIG"
+else
     echo "Error: Configuration file not found at $CONFIG">&2
     exit 1
 fi
 
-source "$CONFIG"
+if [ ! -w "$LOG_FILE" ] && [ ! -w "$(dirname "$LOG_FILE")" 2>/dev/null ]; then
+    LOG_FILE="$HOME/.local/share/disk-guardian.log"
+    mkdir -p "$(dirname "$LOG_FILE")"
+    echo "Defaulting to $LOG_FILE due to lack of permissions"
+fi
+
+show_help() {
+    echo "Usage: disk-guardian [OPTIONS]"
+    echo ""
+    echo "Options:"
+    echo "  -c, --check          Run the storage check immediately"
+    echo "  -t, --target PATH    Override target directory to check"
+    echo "  -m, --threshold %    Override warning threshold percentage"
+    echo "  -d, --dry-run        Simulate the execution without sending alerts"
+    echo "  -test, --test        Send a test notification to verify configuration"
+    echo "  -h, --help           Show this help message"
+}
+
+while getopts "t:m:dhx" opt; do
+    case "$opt" in
+        t) TARGET=$OPTARG ;;    # If they typed -t /var, change $TARGET to /var
+        m) THRESHOLD=$OPTARG ;; # If they typed -m 90, change $THRESHOLD to 90
+        d) DRY_RUN=true ;;      # If they typed -d, turn on dry-run mode
+        x) TEST_MODE=true ;;
+        h) show_help; exit 0 ;;
+        *) show_help; exit 1 ;;
+    esac
+done
+
+if [ "$TEST_MODE" = true ]; then
+    TIMESTAMP=$(date "+%Y-%m-%d %H:%M:%S")
+    echo "[$TIMESTAMP] Sending pipeline test to ntfy..."
+    if [ "$DRY_RUN" = false ]; then
+        curl --max-time 10 \
+        -H "Title: Disk Guardian - Test Pipeline" \
+        -H "Priority: default" \
+        -H "Tags: test,rocket" \
+        -d "Success! The alerting system is configured properly." \
+        "https://ntfy.sh/$NTFY_TOPIC"
+        exit 0
+    else
+        echo "[DRY RUN] Would have sent test alert to ntfy topic: $NTFY_TOPIC"
+        exit 0
+    fi
+fi
+
+if [ ! -r "$TARGET" ]; then
+    echo "Error: You do not have read permissions for '$TARGET'." >&2
+    echo "Please run this command with sudo to scan this directory." >&2
+    exit 1
+fi
+
+# Catch non-root users attempting to scan the system root or system paths
+if [ "$EUID" -ne 0 ] && { [ "$TARGET" = "/" ] || [ "$TARGET" = "/var" ] || [ "$TARGET" = "/root" ]; }; then
+    echo "Error: Scanning system path '$TARGET' requires root privileges." >&2
+    echo "Please use: sudo disk-guardian -t $TARGET" >&2
+    exit 1
+fi
 
 if [ -z "$NTFY_TOPIC" ] || [ -z "$THRESHOLD" ] || [ -z "$TARGET" ]; then
     echo "ERROR: Config file is missing required variables (NTFY_TOPIC, THRESHOLD, or TARGET)." >&2
@@ -25,22 +82,30 @@ if [ "$USAGE" -gt "$THRESHOLD" ]; then
 
     TIMESTAMP=$(date "+%Y-%m-%d %H:%M:%S")
     echo "[$TIMESTAMP] ALERT: Storage threshold breached on $TARGET ($USAGE%)"
-    LARGE_FILES=$(du -ah "$TARGET" 2>/dev/null | sort -rh | head -n 5)
+    LARGE_FILES=$(du -am "$TARGET" 2>/dev/null | sort -rh | head -n 5)
 
-    echo -e "[$TIMESTAMP]"
-    echo -e "Top 5 largest files:\n $LARGE_FILES"$'\n' >> "$LOG_FILE"
 
-    curl \
-      -H "Title: Disk Space Alert - $TARGET" \
-      -H "Priority: high" \
-      -H "Tags: warning,computer" \
-      -d "Storage at ${USAGE}%. Top offenders: $LARGE_FILES" \
-      "https://ntfy.sh/$NTFY_TOPIC"
+    if [ "$DRY_RUN" = false ]; then
+        echo -e "[$TIMESTAMP]"
+        echo -e "Top 5 largest files:\n $LARGE_FILES"$'\n' >> "$LOG_FILE"
+
+
+        curl --max-time 10\
+        -H "Title: Disk Space Alert - $TARGET" \
+        -H "Priority: high" \
+        -H "Tags: warning,computer" \
+        -d "Storage at ${USAGE}%. Top offenders: $LARGE_FILES" \
+        "https://ntfy.sh/$NTFY_TOPIC"
+    else
+        echo "Dry Run active. Alert would have been sent to ntfy topic: $NTFY_TOPIC"
+    fi
 
 else
-    echo "OK: Storage levels normal ($USAGE%)" >> "$LOG_FILE"
+
+    if [ "$DRY_RUN" = false ]; then
+        echo "OK: Storage levels normal ($USAGE%)" >> "$LOG_FILE"
+    else
+        echo "Dry Run active. No alert would have been sent"
+    fi
+
 fi
-
-
-
-
